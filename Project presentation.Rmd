@@ -1,0 +1,177 @@
+---
+title: "Project"
+author: "Mayar Al Mohajer"
+date: "8/19/2022"
+output: ioslides_presentation
+runtime: shiny
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+## Data
+
+The data is from a corpus called HC Corpora. It consists of text files collected from publicly available sources by a web crawler. I used english language files that were gathered from Twitter and different blogs and news sources. This combination should give a rather good mix of general language used today.The data are large text files. Over 4 million lines combined. Unix wordcount gives 102,081,616 individual words. They are not in a sequential order, eg. the lines in the “Blogs” - file are not complete posts and the same post does not continue in the next line.
+
+*Note:* I used a random sample from the raw data to build the final model.
+
+
+
+## used list of transformations:
+
+- Word Stemming
+    - In many NLP tasks you stem the words, which means reducing inflected or derived word to its basic part (ie. connection, connected and connecting, would all become connect)
+- All text to lower case
+    - Removes the problem of beginning of sentence words being “different” than the others.
+    
+
+## Pridection Model
+
+To keep the scope of the project managable, I only concidered so called Markov models. They are a class of probabilistic models that assume we can predict the probability of some future unit without looking too far into the past. I based my model on the stupid backoff -algorithm. Despite its name, it actually performs quite well given very large data. Actually, almost as well as some more complex models.
+
+Stupid backoff -algorithm centers around n-grams. They mean contiguous word sequences of length n. Selection of the size depends on the genre of text you are trying to predict. Higher n-grams are not always preferable for prediction. Also the computing and storage needs grow expotentially with that parameter. I chose to let user choose n-grams of lengts one, two and three,... up to twinty. This means that the predictions can be based on maximum 19 previous words.
+
+
+
+
+## Application
+
+```{r, echo=FALSE}
+
+
+library(shiny)
+library(stringr)
+library(tm)
+library(RWeka)
+library(purrr)
+
+corpus <- readRDS("/Users/mayar/Project/Project/corpus.RData")
+
+BackoffModels <- function(n){
+  BackoffModel <<- list()
+  for(i in 2:n){
+    BackoffModel[[paste(i,"grams")]] <<- createNgrams(corpus,i)
+  }
+}
+
+createNgrams <- function(text, n){ 
+  ngram <- function(x) NGramTokenizer(x, Weka_control(min = n, max = n))
+  ngrams <- TermDocumentMatrix(text, control = list(tokenize = ngram))
+  ngrams_freq <- rowSums(as.matrix(ngrams))
+  ngrams_freq <- sort(ngrams_freq, decreasing = TRUE)
+  ngrams_freq_df <- data.frame(word = names(ngrams_freq), freq=ngrams_freq)
+  
+  ngrams_freq_df
+  
+}
+
+extractLowerGram <- function(x,n){
+  
+  x <- strsplit(as.character(x), ' ' )
+  x <- head(x[[1]],n-1)
+  x <- paste(x,collapse = ' ' )
+  x
+}
+predict <- function(x,n) {
+  xs <- stripWhitespace(stemDocument(removePunctuation(tolower(removeNumbers(x)))))
+  
+  # Back Off Algorithm
+  # Predict the next term of the user input sentence
+  # 1. For prediction of the next word, Quadgram is first used (first three words of Quadgram are the last three words of the user provided sentence).
+  # 2. If no Quadgram is found, back off to Trigram (first two words of Trigram are the last two words of the sentence).
+  # 3. If no Trigram is found, back off to Bigram (first word of Bigram is the last word of the sentence)
+  # 4. If no Bigram is found, back off to the most common word with highest frequency 'the' is returned.
+  
+  if(n > length(strsplit(xs,' ')[[1]])){
+    n <- length(strsplit(xs,' ')[[1]])
+    n <- n+1
+  }
+  
+  if( n >= 2){
+    xs <- strsplit(xs, ' ' )
+    xs <- tail(xs[[1]],n-1)
+    xs <- paste(xs,collapse = ' ' )
+  }
+  currentModel <- BackoffModel[[paste(n,"grams")]]
+  
+  currentModel$lowerGram <- lapply(currentModel[['word']],extractLowerGram,n)
+  
+  matchList <- currentModel[currentModel$lowerGram == xs,]
+  
+  if(dim(matchList)[1] != 0){
+    candidateList <- head(as.character(matchList[['word']]),3)
+    candidateList <- lapply(candidateList,function(x){tail(strsplit(x[[1]]," "),1)[[1]][[n]]})
+    mesg <<- paste("Next word is predicted using ",n,"gram.")
+    candidateList
+  }
+  else if(n == 2){
+    mesg<<- "No Matches Found"
+  }
+  else{
+    predict(xs,n-1)
+  }
+}
+
+
+
+shinyApp(
+
+  ui = fluidPage(
+    
+  
+  # Application title
+  titlePanel("Next Word Prediction"),
+  h6("it may take several seconds"),
+  
+  # Sidebar with a slider input for number of n gram
+  sidebarLayout(
+    sidebarPanel(
+      
+      sliderInput(
+        inputId =  "Ngram", 
+        label = "Select N for Ngram:", 
+        min = 1,
+        max = 20,
+        value = 3,
+        step = 1
+      ),
+      textInput("inputString", "Enter a partial sentence here",value = "it is one of the"),
+      submitButton("Submit", icon("refresh"))
+      
+    ),
+    mainPanel(
+      h2("Predicted Next Word"),
+      strong("Sentence Input:"),
+      tags$style(type='text/css', '#text1 {background-color: rgba(255,255,0,0.40); color: blue;}'), 
+      textOutput('text1'),
+      br(),
+      strong("Sentences with Next Word Candidates:"),
+      textOutput("prediction"),
+      br(),
+      strong("Note:"),
+      tags$style(type='text/css', '#text2 {background-color: rgba(255,255,0,0.40); color: black;}'),
+      textOutput('text2')
+    )
+  )
+),
+
+  server = function(input, output) {
+    output$prediction <- renderText({
+    BackoffModels(input$Ngram)
+    result <- predict(input$inputString,input$Ngram)
+    output$text2 <- renderText({mesg})
+    paste(input$inputString,result,',')
+  });
+  output$text1 <- renderText({input$inputString});
+})
+
+
+```
+
+
+
+=======================================================
